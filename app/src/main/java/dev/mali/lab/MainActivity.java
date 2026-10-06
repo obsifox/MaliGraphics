@@ -59,7 +59,8 @@ public final class MainActivity extends Activity {
                 "Test 04 — 1000 Quads", "Test 05 — Textures", "Test 06 — Alpha Blending",
                 "Test 07 — Sprite Batching", "Test 08 — Text Rendering",
                 "Test 09 — Scrolling Launcher", "Test 10 — Animated Launcher",
-                "Test 11 — Texture Cache Stress", "Test 12 — Shader Stress"
+                "Test 11 — Texture Cache Stress", "Test 12 — Shader Stress",
+                "Test 13 — GL Compat Layer"
         };
         for (final String t : tests) {
             addEntry(list, t, v -> GraphicsLabActivity.start(this, t));

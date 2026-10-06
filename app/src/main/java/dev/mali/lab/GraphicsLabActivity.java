@@ -80,6 +80,7 @@ public final class GraphicsLabActivity extends Activity implements GraphicsView.
             case "Test 10 — Animated Launcher": return LauncherListScene.animated();
             case "Test 11 — Texture Cache Stress": return LauncherListScene.cacheStress();
             case "Test 12 — Shader Stress": return QuadScene.shaderStress();
+            case "Test 13 — GL Compat Layer": return dev.mali.lab.scenes.GLCompatScene.single();
             default: return QuadScene.single();
         }
     }
