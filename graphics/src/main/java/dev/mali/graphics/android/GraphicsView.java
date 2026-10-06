@@ -1,6 +1,8 @@
 package dev.mali.graphics.android;
 
 import android.app.Activity;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.view.Choreographer;
 import android.view.Surface;
 import android.view.SurfaceHolder;
@@ -73,6 +75,11 @@ public final class GraphicsView extends SurfaceView implements SurfaceHolder.Cal
         if (renderThread != null) renderThread.postSurfaceLost();
     }
 
+    @Override protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        if (renderThread != null) renderThread.shutdown();
+    }
+
     /** Marks the runtime as failed from anywhere (tests, watchdog). */
     public void failRuntime(Throwable t) {
         if (runtimeFailed.compareAndSet(false, true)) {
@@ -84,8 +91,7 @@ public final class GraphicsView extends SurfaceView implements SurfaceHolder.Cal
 
     // ------------------------------------------------------------------ //
 
-    private final class RenderThread extends Thread implements Choreographer.FrameCallback, RenderHandle {
-        private final Object lock = new Object();
+    private final class RenderThread extends HandlerThread implements Choreographer.FrameCallback, RenderHandle {
         private volatile boolean running = true;
         private volatile boolean initialized = false;
         private volatile boolean resizeRequested = false;
@@ -96,9 +102,20 @@ public final class GraphicsView extends SurfaceView implements SurfaceHolder.Cal
         private dev.mali.graphics.gles.GlesRendererImpl renderer;
         private double refreshHz = 60.0;
 
+        private Handler handler;
+
         RenderThread(String name) { super(name); }
 
-        void postInit() { synchronized (lock) { lock.notifyAll(); } }
+        void postInit() {
+            Handler h = handler;
+            if (h != null) h.post(() -> { /* kick: init happens on first frame callback */ });
+        }
+
+        void shutdown() {
+            running = false;
+            try { Choreographer.getInstance().removeFrameCallback(this); } catch (Throwable ignored) {}
+            quitSafely();
+        }
         void postResize(int w, int h) { resizeRequested = true; pendingWidth = w; pendingHeight = h; }
         void postSurfaceLost() { surfaceValid = false; }
 
@@ -106,7 +123,10 @@ public final class GraphicsView extends SurfaceView implements SurfaceHolder.Cal
 
         @Override public void requestStatsOverlayUpdate(String line) { /* handled by lab activity */ }
 
-        @Override public void run() {
+        @Override protected void onLooperPrepared() {
+            // HandlerThread guarantees a prepared Looper on THIS thread, so
+            // Choreographer.getInstance() binds to the render thread (mission §8).
+            handler = new Handler(getLooper());
             try {
                 Choreographer.getInstance().postFrameCallback(this);
             } catch (Throwable t) {
@@ -117,7 +137,19 @@ public final class GraphicsView extends SurfaceView implements SurfaceHolder.Cal
         private void fail(Throwable t) {
             running = false;
             runtimeFailed.set(true);
+            try { Choreographer.getInstance().removeFrameCallback(this); } catch (Throwable ignored) {}
+            quitSafely();
             ((Activity) getContext()).runOnUiThread(() -> hostCallback.onRuntimeFailed(t));
+        }
+
+        /** Tears down EGL/GL objects when the Android Surface goes away (pause/home/rotate). */
+        private void teardown() {
+            initialized = false;
+            try { if (renderer != null) renderer.destroy(); } catch (Throwable ignored) {}
+            try { if (context != null) context.destroy(); } catch (Throwable ignored) {}
+            try { if (surface != null) surface.destroy(); } catch (Throwable ignored) {}
+            try { if (device != null) device.destroy(); } catch (Throwable ignored) {}
+            renderer = null; context = null; surface = null; device = null;
         }
 
         private void initializeIfNeeded() {
@@ -148,6 +180,7 @@ public final class GraphicsView extends SurfaceView implements SurfaceHolder.Cal
         @Override public void doFrame(long frameTimeNanos) {
             if (!running) return;
             try {
+                if (initialized && !surfaceValid) teardown(); // surface lost -> rebuild on next create
                 initializeIfNeeded();
                 if (initialized && surfaceValid && renderer != null) {
                     if (resizeRequested) {
@@ -159,9 +192,15 @@ public final class GraphicsView extends SurfaceView implements SurfaceHolder.Cal
                     hostCallback.onDrawFrame(this, frame);
                     renderer.endFrameAndPresent();
                 }
-                Choreographer.getInstance().postFrameCallback(this);
+                if (running) Choreographer.getInstance().postFrameCallback(this);
             } catch (Throwable t) {
-                fail(t);
+                if (initialized && !surfaceValid) {
+                    // In-flight frame raced with surface destruction — recoverable.
+                    try { teardown(); } catch (Throwable ignored) {}
+                    if (running) Choreographer.getInstance().postFrameCallback(this);
+                } else {
+                    fail(t);
+                }
             }
         }
     }
