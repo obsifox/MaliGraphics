@@ -1,0 +1,12 @@
+# Built application files
+build/
+*/build/
+# Gradle
+.gradle/
+# IDE
+.idea/
+*.iml
+local.properties
+# Misc
+captures/
+.DS_Store
